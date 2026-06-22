@@ -19,7 +19,7 @@ def load_model(weights_path: str) -> YOLO:
 st.title("YOLO 기반 군수품(총기류) 탐지 및 카운팅")
 
 uploaded_file = st.file_uploader("사진을 업로드하세요", type=["jpg", "jpeg", "png"])
-conf_threshold = st.slider("탐지 confidence 임계값", 0.0, 1.0, 0.25, 0.05)
+conf_threshold = st.slider("탐지 confidence 임계값", 0.0, 1.0, 0.7, 0.05)
 
 if uploaded_file is not None:
     model = load_model(WEIGHTS_PATH)

@@ -12,6 +12,7 @@ def parse_args():
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--project", default="models", help="결과 저장 폴더")
     parser.add_argument("--name", default="firearms_yolo", help="실험 이름")
+    parser.add_argument("--device", default="0", help="학습 장치 (예: 0=GPU 0번, cpu=CPU)")
     return parser.parse_args()
 
 
@@ -25,6 +26,7 @@ def main():
         batch=args.batch,
         project=args.project,
         name=args.name,
+        device=args.device,
     )
 
 
