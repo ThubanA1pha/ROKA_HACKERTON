@@ -8,7 +8,7 @@ from firebase_admin import credentials, firestore, storage
 
 # serviceAccountKey.json은 레포에 절대 커밋하지 않는다 (.gitignore 처리 필수)
 SERVICE_ACCOUNT_PATH = os.environ.get("FIREBASE_SERVICE_ACCOUNT", "serviceAccountKey.json")
-STORAGE_BUCKET = os.environ.get("FIREBASE_STORAGE_BUCKET", "roka-hackathon.appspot.com")
+STORAGE_BUCKET = os.environ.get("FIREBASE_STORAGE_BUCKET", "roka-hackathon.firebasestorage.app")
 
 _app = None
 

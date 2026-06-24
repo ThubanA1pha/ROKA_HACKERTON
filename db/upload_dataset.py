@@ -10,7 +10,7 @@ from PIL import Image
 from firebase_config import get_db, get_bucket
 
 LOCAL_ROOT = "./raw_data"  # ./raw_data/k1/*.jpg 형태로 정리되어 있다고 가정
-WEAPON_CLASSES = ["k1", "k2", "k2c1", "m16"]
+WEAPON_CLASSES = ["k1", "k2", "k2c1"]
 
 
 def upload_class(weapon_class: str):

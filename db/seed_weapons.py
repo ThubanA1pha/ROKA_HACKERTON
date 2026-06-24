@@ -1,6 +1,7 @@
 """
 weapons 마스터 컬렉션 초기 등록 스크립트.
-문서ID/code는 YOLO 모델의 클래스명(data_combined.yaml의 names)과 정확히 일치시킨다.
+문서ID/code는 YOLO 모델의 클래스명(data_no_m16.yaml의 names)과 정확히 일치시킨다.
+대상: K1, K2, K2C1 (M16A1은 2026-06-23부로 범위에서 제외)
 실행: python seed_weapons.py
 specsVerified=False인 필드(길이/무게 등)는 공식 자료로 직접 확인 후 채울 것.
 """
@@ -42,20 +43,6 @@ WEAPONS = [
         "developedBy": "S&T모티브 / 육군본부",
         "description": "2014년 개발에 착수해 2016년부터 전방부대에 보급된 K2의 개량형. "
                        "신축형 개머리판과 피카티니 레일이 추가됐고 내부 구조·성능은 K2와 동일하다.",
-        "specsVerified": False,
-        "overallLengthMm": None,
-        "weightKg": None,
-    },
-    {
-        "code": "m16",
-        "officialName": "M16A1 소총",
-        "type": "돌격소총",
-        "caliber": "5.56x45mm (.223 Remington / KM193 기준)",
-        "manufacturer": "Colt(원본) / 대우정밀(면허생산, 모델명 603K)",
-        "developedBy": "Colt's Manufacturing Company",
-        "description": "1968년 한국군에 처음 제식으로 지급되었고, 1974~1985년 사이 "
-                       "대우정밀에서 콜트 모델 603을 면허생산했다. "
-                       "현재는 대부분 예비군용·교육용으로 전환되었다.",
         "specsVerified": False,
         "overallLengthMm": None,
         "weightKg": None,

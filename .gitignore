@@ -43,3 +43,28 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Firebase
+serviceAccountKey.json
+**/serviceAccountKey.json
+.env
+.firebase/
+firebase-debug.log
+firestore-debug.log
+
+# YOLO 학습 산출물
+models/*
+!models/.gitkeep
+!models/firearms_yolo_no_m16/
+runs/
+train_log*.txt
+*.pt
+
+# 데이터셋 원본
+m16image/
