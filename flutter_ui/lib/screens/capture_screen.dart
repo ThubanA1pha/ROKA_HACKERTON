@@ -87,20 +87,14 @@ class CaptureScreen extends StatefulWidget {
 }
 
 // UI 표시 순서 고정 (Firestore 문서 순서 무관)
-const _weaponOrder = ['K-2', 'K-1A', 'K2C1'];
+const _weaponOrder = ['K2', 'K1', 'K2C1'];
 
-// 총번은 개체별 데이터이므로 기종 대표 예시값을 폴백으로 유지
-const _defaultSerials = {
-  'K-2': 'K2-2231140',
-  'K-1A': 'K1A-100742',
-  'K2C1': 'K2C1-04412',
-};
 
 class _CaptureScreenState extends State<CaptureScreen> {
   _ScreenState _screenState = _ScreenState.idle;
 
   // ── YOLO 서버 응답 ─────────────────────────────────────
-  String _model = 'K-2';
+  String _model = 'K2';
   int _qty = 0;
   double _confidence = 0.0;
   Uint8List? _annotatedBytes;
@@ -116,9 +110,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
   // ── 저장 중 플래그 ──────────────────────────────────────
   bool _saving = false;
 
-  // ── 일련번호 촬영 결과 (탐지 인덱스 → 인식된 번호) ──────────────
-  final Map<int, String?> _capturedSerials = {};
-  final Map<int, bool> _serialCapturing = {};
+  // ── 일련번호 (수량과 동기화되는 입력 필드 + 로딩 상태) ────────────
+  final List<TextEditingController> _serialControllers = [];
+  final List<bool> _serialLoading = [];
 
   // ── 이번 촬영 세션에서 저장 완료된 기종 집합 ──────────────
   final Set<String> _inspectedModels = {};
@@ -132,10 +126,6 @@ class _CaptureScreenState extends State<CaptureScreen> {
   StreamSubscription<Map<String, Weapon>>? _weaponSub;
 
   int get _authorized => _weaponMap[_model]?.authorizedQuantity ?? 0;
-  String get _serial => _defaultSerials[_model] ?? '-';
-  // 기종별 수동 입력 총번 — YOLO로 개별 총번 식별 불가이므로 사용자가 직접 수정
-  final Map<String, String> _serialOverrides = {};
-  String get _displaySerial => _serialOverrides[_model] ?? _serial;
   static const _unit = '정';
 
   @override
@@ -143,7 +133,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
     super.initState();
     _weaponSub = WeaponRepository.watchAllByDisplayName().listen(
       (map) {
-        if (mounted) setState(() => _weaponMap = map);
+        if (mounted) {
+          setState(() => _weaponMap = {...Weapon.fallbacks, ...map});
+        }
       },
       onError: (_) {},
     );
@@ -158,6 +150,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
     _weaponSub?.cancel();
     _coldStartTimer?.cancel();
     _remarksController.dispose();
+    for (final c in _serialControllers) c.dispose();
     super.dispose();
   }
 
@@ -176,17 +169,18 @@ class _CaptureScreenState extends State<CaptureScreen> {
     }
 
     _remarksController.clear();
-    _capturedSerials.clear();
-    _serialCapturing.clear();
+    for (final c in _serialControllers) c.dispose();
+    _serialControllers.clear();
+    _serialLoading.clear();
     setState(() {
       _qty = 0;
       _condition = 'good';
       _screenState = _ScreenState.loading;
       _coldStartWarning = false;
     });
-    // 8초 이상 대기 시 Cold Start 안내로 전환
+    // 10초 이상 대기 시 Cold Start 안내로 전환
     _coldStartTimer?.cancel();
-    _coldStartTimer = Timer(const Duration(seconds: 8), () {
+    _coldStartTimer = Timer(const Duration(seconds: 10), () {
       if (mounted && _screenState == _ScreenState.loading) {
         setState(() => _coldStartWarning = true);
       }
@@ -203,8 +197,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
             ));
 
       final streamed =
-          await request.send().timeout(const Duration(seconds: 60));
-      final response = await http.Response.fromStream(streamed);
+          await request.send().timeout(const Duration(seconds: 120));
+      final response = await http.Response.fromStream(streamed)
+          .timeout(const Duration(seconds: 120));
 
       if (response.statusCode != 200) {
         _showError(
@@ -236,9 +231,10 @@ class _CaptureScreenState extends State<CaptureScreen> {
               .reduce((a, b) => a > b ? a : b);
 
       // weapons 제원은 initState에서 구독 중인 _weaponMap에서 즉시 사용 가능
+      final detectedQty = counts[dominantYolo] ?? 0;
       setState(() {
-        _model = _weaponMap.containsKey(mappedModel) ? mappedModel : 'K-2';
-        _qty = counts[dominantYolo] ?? 0;
+        _model = _weaponMap.containsKey(mappedModel) ? mappedModel : 'K2';
+        _qty = detectedQty;
         _confidence = maxConf;
         _annotatedBytes = base64Decode(annotatedB64);
         _confirmedDetections =
@@ -248,6 +244,10 @@ class _CaptureScreenState extends State<CaptureScreen> {
         _coldStartWarning = false;
       });
       _coldStartTimer?.cancel();
+      // 탐지 수량에 맞게 일련번호 입력 필드 초기화
+      _serialControllers.addAll(
+          List.generate(detectedQty, (_) => TextEditingController()));
+      _serialLoading.addAll(List.filled(detectedQty, false));
     } catch (e, st) {
       _coldStartTimer?.cancel();
       debugPrint('YOLO request/parse failed: $e');
@@ -269,7 +269,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
     );
     if (photo == null) return;
 
-    setState(() => _serialCapturing[idx] = true);
+    if (idx < _serialLoading.length) setState(() => _serialLoading[idx] = true);
 
     try {
       final request =
@@ -281,8 +281,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
             ));
 
       final streamed =
-          await request.send().timeout(const Duration(seconds: 60));
-      final response = await http.Response.fromStream(streamed);
+          await request.send().timeout(const Duration(seconds: 120));
+      final response = await http.Response.fromStream(streamed)
+          .timeout(const Duration(seconds: 120));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -298,10 +299,10 @@ class _CaptureScreenState extends State<CaptureScreen> {
         }
 
         if (mounted) {
-          if (serial != null) {
-            setState(() => _capturedSerials[idx] = serial);
+          if (serial != null && idx < _serialControllers.length) {
+            _serialControllers[idx].text = serial;
           } else {
-            _showError('일련번호를 인식하지 못했습니다. 더 가까이서 촬영해 주세요.');
+            _showError('일련번호를 인식하지 못했습니다. 직접 입력해 주세요.');
           }
         }
       } else {
@@ -315,7 +316,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
       debugPrintStack(stackTrace: st);
       if (mounted) _showError('일련번호 촬영 실패: $e');
     } finally {
-      if (mounted) setState(() => _serialCapturing[idx] = false);
+      if (mounted && idx < _serialLoading.length) {
+        setState(() => _serialLoading[idx] = false);
+      }
     }
   }
 
@@ -332,7 +335,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
   // │ modelVersion            │ "firearms_yolo_no_m16"                       │
   // ├─────────────────────────┼──────────────────────────────────────────────┤
   // │ (Flutter 추가 필드)      │                                              │
-  // │ weaponType              │ "K-2"  (Flutter 표시명)                      │
+  // │ weaponType              │ "K2"   (Flutter 표시명)                      │
   // │ confirmedQuantity       │ 12     (사용자 최종 확인 수량)               │
   // │ authorizedQuantity      │ 14     (편제 정수)                           │
   // │ shortage                │ 2      (부족량, 음수=초과)                   │
@@ -342,13 +345,24 @@ class _CaptureScreenState extends State<CaptureScreen> {
   Future<void> _saveToFirestore() async {
     setState(() => _saving = true);
     try {
-      // 사용자가 별도 촬영한 일련번호를 confirmedDetections에 병합
-      final detectionsToSave = _confirmedDetections.asMap().entries.map((e) {
-        final d = Map<String, dynamic>.from(e.value);
-        final s = _capturedSerials[e.key];
-        if (s != null) d['serialNumber'] = s;
-        return d;
-      }).toList();
+      // 수량(_qty) 기준으로 총기별 일련번호를 포함한 detection 목록 구성
+      final dominantYoloClass =
+          _weaponMap[_model]?.code ?? _model.toLowerCase();
+      final detectionsToSave = List.generate(_qty, (i) {
+        final serial = i < _serialControllers.length
+            ? _serialControllers[i].text.trim()
+            : '';
+        if (i < _confirmedDetections.length) {
+          final d = Map<String, dynamic>.from(_confirmedDetections[i]);
+          if (serial.isNotEmpty) d['serialNumber'] = serial;
+          return d;
+        }
+        return <String, dynamic>{
+          'class': dominantYoloClass,
+          'confidence': _confidence,
+          if (serial.isNotEmpty) 'serialNumber': serial,
+        };
+      });
 
       await FirebaseFirestore.instance.collection('detectionRecords').add({
         // ── detection_store.py와 동일한 핵심 필드 ──
@@ -373,114 +387,6 @@ class _CaptureScreenState extends State<CaptureScreen> {
       _showError('Firestore 저장 실패 — Firebase 연결을 확인하세요.');
     } finally {
       if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  Future<void> _showSerialEditDialog() async {
-    final ctrl = TextEditingController(text: _displaySerial);
-    try {
-      final result = await showDialog<String>(
-        context: context,
-        builder: (ctx) => Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 28),
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(22, 26, 22, 20),
-            decoration: BoxDecoration(
-              color: AppColors.card,
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(color: AppColors.border),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('총번 수정', style: T.sans(size: 17, weight: FontWeight.w800)),
-                const SizedBox(height: 4),
-                Text('$_model 기종의 총번을 직접 입력하세요',
-                    style: T.sans(
-                        size: 12.5,
-                        weight: FontWeight.w500,
-                        color: AppColors.textSub)),
-                const SizedBox(height: 18),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: AppColors.inner,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppColors.borderSoft),
-                  ),
-                  child: TextField(
-                    controller: ctrl,
-                    autofocus: true,
-                    style: T.mono(
-                        size: 16, weight: FontWeight.w600, letterSpacing: 0.6),
-                    cursorColor: AppColors.gold,
-                    decoration: InputDecoration(
-                      hintText: '예: K2-2231140',
-                      hintStyle: T.mono(
-                          size: 15,
-                          weight: FontWeight.w400,
-                          color: AppColors.textMute),
-                      border: InputBorder.none,
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(vertical: 11),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Row(
-                  children: [
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () => Navigator.pop(ctx),
-                        child: Container(
-                          height: 46,
-                          decoration: BoxDecoration(
-                            color: const Color(0x0FFFFFFF),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Center(
-                              child: Text('취소',
-                                  style: T.sans(
-                                      size: 14.5,
-                                      weight: FontWeight.w700,
-                                      color: AppColors.textSub))),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () => Navigator.pop(ctx, ctrl.text.trim()),
-                        child: Container(
-                          height: 46,
-                          decoration: BoxDecoration(
-                            color: AppColors.gold,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Center(
-                              child: Text('확인',
-                                  style: T.sans(
-                                      size: 14.5,
-                                      weight: FontWeight.w800,
-                                      color: const Color(0xFF2A2310)))),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-      if (result != null && result.isNotEmpty && mounted) {
-        setState(() => _serialOverrides[_model] = result);
-      }
-    } finally {
-      ctrl.dispose();
     }
   }
 
@@ -810,8 +716,6 @@ class _CaptureScreenState extends State<CaptureScreen> {
               _recognizedCard(),
               const SizedBox(height: 13),
               _modelSelector(),
-              const SizedBox(height: 13),
-              _serialCard(),
               const SizedBox(height: 13),
               _quantityCard(statusLabel, statusColor),
               const SizedBox(height: 13),
@@ -1143,50 +1047,6 @@ class _CaptureScreenState extends State<CaptureScreen> {
     );
   }
 
-  Widget _serialCard() {
-    return _panel(
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('총번 (Serial No.)',
-                    style: T.sans(
-                        size: 12,
-                        weight: FontWeight.w500,
-                        color: AppColors.textSub)),
-                const SizedBox(height: 5),
-                Text(_displaySerial,
-                    style: T.mono(
-                        size: 18, weight: FontWeight.w600, letterSpacing: 0.7)),
-              ],
-            ),
-          ),
-          GestureDetector(
-            onTap: _showSerialEditDialog,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
-              decoration: BoxDecoration(
-                  color: const Color(0x0FFFFFFF),
-                  borderRadius: BorderRadius.circular(9)),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.edit_outlined,
-                    size: 13, color: AppColors.textSoft),
-                const SizedBox(width: 5),
-                Text('수정',
-                    style: T.sans(
-                        size: 13,
-                        weight: FontWeight.w600,
-                        color: AppColors.textSoft)),
-              ]),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _quantityCard(String statusLabel, Color statusColor) {
     return _panel(
       padding: const EdgeInsets.all(16),
@@ -1268,8 +1128,20 @@ class _CaptureScreenState extends State<CaptureScreen> {
 
   Widget _stepBtn(bool plus) {
     return GestureDetector(
-      onTap: () =>
-          setState(() => _qty = plus ? _qty + 1 : (_qty - 1).clamp(0, 999)),
+      onTap: () {
+        if (plus) {
+          setState(() {
+            _qty++;
+            _serialControllers.add(TextEditingController());
+            _serialLoading.add(false);
+          });
+        } else if (_qty > 0) {
+          final removed = _serialControllers.removeLast();
+          _serialLoading.removeLast();
+          removed.dispose();
+          setState(() => _qty--);
+        }
+      },
       child: Container(
         width: 54,
         height: 54,
@@ -1497,17 +1369,29 @@ class _CaptureScreenState extends State<CaptureScreen> {
 
   // ════════════ 일련번호 테이블 ════════════
   Widget _serialTable() {
-    if (_confirmedDetections.isEmpty) return const SizedBox.shrink();
+    if (_qty == 0) return const SizedBox.shrink();
 
     return _panel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('일련번호',
-              style: T.sans(
-                  size: 13, weight: FontWeight.w700, color: AppColors.textSub)),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('총기별 일련번호',
+                  style: T.sans(
+                      size: 13,
+                      weight: FontWeight.w700,
+                      color: AppColors.textSub)),
+              Text('총 $_qty정 · 사진 또는 직접 입력',
+                  style: T.sans(
+                      size: 11,
+                      weight: FontWeight.w500,
+                      color: AppColors.textMute)),
+            ],
+          ),
           const SizedBox(height: 10),
-          for (int i = 0; i < _confirmedDetections.length; i++) ...[
+          for (int i = 0; i < _qty; i++) ...[
             if (i > 0) const Divider(height: 1, color: AppColors.borderSoft),
             _serialRow(i),
           ],
@@ -1517,68 +1401,83 @@ class _CaptureScreenState extends State<CaptureScreen> {
   }
 
   Widget _serialRow(int idx) {
-    final det = _confirmedDetections[idx];
-    final weaponName = Weapon.yoloToDisplayName(det['class'] as String? ?? '');
-    final captured = _capturedSerials[idx];
-    final isCapturing = _serialCapturing[idx] ?? false;
+    final isLoading = idx < _serialLoading.length && _serialLoading[idx];
+    final ctrl =
+        idx < _serialControllers.length ? _serialControllers[idx] : null;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 11),
+      padding: const EdgeInsets.symmetric(vertical: 9),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppColors.gold.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: AppColors.gold.withOpacity(0.25)),
+            ),
+            child: Text(_model,
+                style: T.mono(
+                    size: 11,
+                    weight: FontWeight.w700,
+                    color: AppColors.goldLight)),
+          ),
+          const SizedBox(width: 10),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(weaponName,
-                    style: T.mono(size: 14.5, weight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Text('${idx + 1}번째 탐지',
-                    style: T.sans(
-                        size: 11,
-                        weight: FontWeight.w500,
-                        color: AppColors.textMute)),
-              ],
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+              decoration: BoxDecoration(
+                color: AppColors.inner,
+                borderRadius: BorderRadius.circular(9),
+                border: Border.all(color: AppColors.borderSoft),
+              ),
+              child: TextField(
+                controller: ctrl,
+                style: T.mono(
+                    size: 13, weight: FontWeight.w600, letterSpacing: 0.5),
+                cursorColor: AppColors.gold,
+                decoration: InputDecoration(
+                  hintText: '총번 입력',
+                  hintStyle: T.mono(
+                      size: 12,
+                      weight: FontWeight.w400,
+                      color: AppColors.textMute),
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
             ),
           ),
-          if (isCapturing)
+          const SizedBox(width: 8),
+          if (isLoading)
             const SizedBox(
-              width: 22,
-              height: 22,
-              child: CircularProgressIndicator(
-                  color: AppColors.gold, strokeWidth: 2),
+              width: 34,
+              height: 34,
+              child: Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                      color: AppColors.gold, strokeWidth: 2),
+                ),
+              ),
             )
-          else if (captured != null)
-            Text(captured,
-                style: T.mono(
-                    size: 14,
-                    weight: FontWeight.w600,
-                    color: AppColors.goldLight,
-                    letterSpacing: 0.5))
           else
             GestureDetector(
               onTap: () => _captureSerialForIndex(idx),
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+                width: 34,
+                height: 34,
                 decoration: BoxDecoration(
                   color: AppColors.gold.withOpacity(0.14),
                   borderRadius: BorderRadius.circular(9),
                   border: Border.all(color: AppColors.gold.withOpacity(0.4)),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.photo_camera_outlined,
-                        size: 13, color: AppColors.goldLight),
-                    const SizedBox(width: 5),
-                    Text('일련번호',
-                        style: T.sans(
-                            size: 13,
-                            weight: FontWeight.w700,
-                            color: AppColors.goldLight)),
-                  ],
-                ),
+                child: const Icon(Icons.photo_camera_outlined,
+                    size: 16, color: AppColors.goldLight),
               ),
             ),
         ],
@@ -1641,8 +1540,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
               GestureDetector(
                 onTap: () {
                   Navigator.pop(ctx);
-                  _capturedSerials.clear();
-                  _serialCapturing.clear();
+                  for (final c in _serialControllers) c.dispose();
+                  _serialControllers.clear();
+                  _serialLoading.clear();
                   setState(() {
                     _screenState = _ScreenState.idle;
                     _annotatedBytes = null;

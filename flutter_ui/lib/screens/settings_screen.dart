@@ -99,7 +99,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _activityStats(),
             _group('재고 · 조사', [
               _navItem(Icons.gps_fixed, '관리 기종 설정',
-                  sub: 'K-2 · K-1A · K2C1', trailing: '3종'),
+                  sub: 'K2 · K1 · K2C1', trailing: '3종'),
               _navItem(Icons.grid_view_rounded, '편제 정수 관리',
                   sub: '기종별 인가 수량 편집'),
               _navItem(Icons.file_download_outlined, '데이터 내보내기',

@@ -20,13 +20,13 @@ class _HomeScreenState extends State<HomeScreen> {
   // ── Firestore 스트림 데이터 ────────────────────────────
   Map<String, Weapon> _weaponMap = Map.of(Weapon.fallbacks);
 
-  /// weaponType(K-2 등) 키 → 해당 기종의 가장 최신 detectionRecords 문서
+  /// weaponType(K2 등) 키 → 해당 기종의 가장 최신 detectionRecords 문서
   Map<String, Map<String, dynamic>> _latestByType = {};
 
   StreamSubscription<Map<String, Weapon>>? _weaponSub;
   StreamSubscription<QuerySnapshot>? _recordsSub;
 
-  static const _weaponOrder = ['K-2', 'K-1A', 'K2C1'];
+  static const _weaponOrder = ['K2', 'K1', 'K2C1'];
 
   // ── 파생 수치 ────────────────────────────────────────────
   int get _inspectedCount => _latestByType.length;
@@ -39,10 +39,13 @@ class _HomeScreenState extends State<HomeScreen> {
   int _confirmedQty(String displayName) =>
       (_latestByType[displayName]?['confirmedQuantity'] as num?)?.toInt() ?? 0;
 
-  int _authorizedQty(String displayName) =>
-      (_latestByType[displayName]?['authorizedQuantity'] as num?)?.toInt()
-      ?? _weaponMap[displayName]?.authorizedQuantity
-      ?? 0;
+  int _authorizedQty(String displayName) {
+    final stored =
+        (_latestByType[displayName]?['authorizedQuantity'] as num?)?.toInt() ??
+            0;
+    if (stored > 0) return stored;
+    return _weaponMap[displayName]?.authorizedQuantity ?? 0;
+  }
 
   bool _isShort(String displayName) =>
       ((_latestByType[displayName]?['shortage'] as num?)?.toInt() ?? 0) > 0;
@@ -64,7 +67,11 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
 
     _weaponSub = WeaponRepository.watchAllByDisplayName().listen(
-      (map) { if (mounted) setState(() => _weaponMap = map); },
+      (map) {
+        if (mounted) {
+          setState(() => _weaponMap = {...Weapon.fallbacks, ...map});
+        }
+      },
       onError: (_) {},
     );
 

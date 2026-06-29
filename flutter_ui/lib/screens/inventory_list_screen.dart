@@ -21,7 +21,7 @@ class InventoryListScreen extends StatefulWidget {
 }
 
 class _InventoryListScreenState extends State<InventoryListScreen> {
-  static const _weaponOrder = ['K-2', 'K-1A', 'K2C1'];
+  static const _weaponOrder = ['K2', 'K1', 'K2C1'];
 
   // ── Firestore 실시간 데이터 ──────────────────────────────
   Map<String, Weapon> _weaponMap = Map.of(Weapon.fallbacks);
@@ -68,7 +68,9 @@ class _InventoryListScreenState extends State<InventoryListScreen> {
 
     _weaponSub = WeaponRepository.watchAllByDisplayName().listen(
       (map) {
-        if (mounted) setState(() => _weaponMap = map);
+        if (mounted) {
+          setState(() => _weaponMap = {...Weapon.fallbacks, ...map});
+        }
       },
       onError: (_) {},
     );
@@ -295,9 +297,9 @@ class _InventoryListScreenState extends State<InventoryListScreen> {
     final latest = _latestByType[displayName];
     final weapon = _weaponMap[displayName];
     final qty = (latest?['confirmedQuantity'] as num?)?.toInt() ?? 0;
-    final authorized = (latest?['authorizedQuantity'] as num?)?.toInt() ??
-        weapon?.authorizedQuantity ??
-        0;
+    final storedAuth = (latest?['authorizedQuantity'] as num?)?.toInt() ?? 0;
+    final authorized =
+        storedAuth > 0 ? storedAuth : (weapon?.authorizedQuantity ?? 0);
     final shortage = authorized - qty;
     final isShort = shortage > 0;
     final isInspected = latest != null;
@@ -450,8 +452,7 @@ class _InventoryListScreenState extends State<InventoryListScreen> {
                         ),
                       )
                     else
-                      // 최근 5건만 표시
-                      ...records.take(5).map(_recordRow),
+                      for (final r in records) ..._expandRecord(r),
                   ],
                 ),
               ),
@@ -461,28 +462,64 @@ class _InventoryListScreenState extends State<InventoryListScreen> {
     );
   }
 
-  // ── 점검 기록 행 (총번 행 대체) ──────────────────────────
-  Widget _recordRow(Map<String, dynamic> data) {
+  // ── 점검 기록 1건 → 총기별 행으로 확장 ─────────────────────
+  Iterable<Widget> _expandRecord(Map<String, dynamic> data) {
     final condition = data['condition'] as String? ?? 'good';
-    final qty = (data['confirmedQuantity'] as num?)?.toInt() ?? 0;
-    final authorized = (data['authorizedQuantity'] as num?)?.toInt() ?? 0;
+    final storedAuth = (data['authorizedQuantity'] as num?)?.toInt() ?? 0;
+    final weaponType = data['weaponType'] as String? ?? '';
+    final authorized = storedAuth > 0
+        ? storedAuth
+        : (_weaponMap[weaponType]?.authorizedQuantity ??
+            Weapon.fallbacks[weaponType]?.authorizedQuantity ??
+            0);
     final dt = _parseTs(data['capturedAt']);
     final dateStr = dt != null
         ? '${dt.month.toString().padLeft(2, '0')}.${dt.day.toString().padLeft(2, '0')}  '
           '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}'
         : '-';
-
-    final conditionLabel = switch (condition) {
-      'repair' => '정비요',
-      'unusable' => '불용',
-      _ => '양호',
-    };
     final conditionColor = switch (condition) {
       'repair' => AppColors.terracotta,
       'unusable' => AppColors.red,
       _ => AppColors.gold,
     };
+    final conditionLabel = switch (condition) {
+      'repair' => '정비요',
+      'unusable' => '불용',
+      _ => '양호',
+    };
 
+    final rawDets = data['confirmedDetections'];
+    final detections = rawDets is List
+        ? rawDets.whereType<Map>().toList()
+        : <Map>[];
+    final qty = (data['confirmedQuantity'] as num?)?.toInt() ?? 0;
+    final count = detections.isNotEmpty ? detections.length : qty;
+
+    if (count == 0) return [];
+
+    return List.generate(count, (i) {
+      final serial = i < detections.length
+          ? (detections[i]['serialNumber'] as String? ?? '')
+          : '';
+      return _weaponRow(
+        dateStr: dateStr,
+        serial: serial,
+        seqIdx: i + 1,
+        authorized: authorized,
+        conditionColor: conditionColor,
+        conditionLabel: conditionLabel,
+      );
+    });
+  }
+
+  Widget _weaponRow({
+    required String dateStr,
+    required String serial,
+    required int seqIdx,
+    required int authorized,
+    required Color conditionColor,
+    required String conditionLabel,
+  }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -493,20 +530,32 @@ class _InventoryListScreenState extends State<InventoryListScreen> {
           Container(
               width: 7,
               height: 7,
-              decoration: BoxDecoration(
-                  color: conditionColor, shape: BoxShape.circle)),
+              decoration:
+                  BoxDecoration(color: conditionColor, shape: BoxShape.circle)),
           const SizedBox(width: 10),
           Expanded(
-            child:
-                Text(dateStr, style: T.mono(size: 13, weight: FontWeight.w500)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(dateStr,
+                    style: T.mono(size: 12, weight: FontWeight.w500)),
+                if (serial.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(serial,
+                      style: T.mono(
+                          size: 11.5,
+                          weight: FontWeight.w600,
+                          color: AppColors.goldLight,
+                          letterSpacing: 0.4)),
+                ],
+              ],
+            ),
           ),
-          Text(
-            '$qty / $authorized',
-            style: T.mono(
-                size: 12.5,
-                weight: FontWeight.w600,
-                color: AppColors.textSub),
-          ),
+          Text('$seqIdx / $authorized',
+              style: T.mono(
+                  size: 12.5,
+                  weight: FontWeight.w600,
+                  color: AppColors.textSub)),
           const SizedBox(width: 10),
           Text(conditionLabel,
               style: T.sans(

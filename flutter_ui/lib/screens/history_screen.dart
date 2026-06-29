@@ -18,7 +18,7 @@ class HistoryScreen extends StatefulWidget {
 }
 
 class _HistoryScreenState extends State<HistoryScreen> {
-  static const _weaponOrder = ['K-2', 'K-1A', 'K2C1'];
+  static const _weaponOrder = ['K2', 'K1', 'K2C1'];
 
   /// 현재 펼쳐진 기종 집합
   final Set<String> _open = {};
