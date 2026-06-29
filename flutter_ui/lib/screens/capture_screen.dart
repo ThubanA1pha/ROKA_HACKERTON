@@ -63,6 +63,10 @@ class _CaptureScreenState extends State<CaptureScreen> {
   // ── 저장 중 플래그 ──────────────────────────────────────
   bool _saving = false;
 
+  // ── 일련번호 촬영 결과 (탐지 인덱스 → 인식된 번호) ──────────────
+  final Map<int, String?> _capturedSerials = {};
+  final Map<int, bool> _serialCapturing = {};
+
   // ── 이번 촬영 세션에서 저장 완료된 기종 집합 ──────────────
   final Set<String> _inspectedModels = {};
 
@@ -117,6 +121,8 @@ class _CaptureScreenState extends State<CaptureScreen> {
     }
 
     _remarksController.clear();
+    _capturedSerials.clear();
+    _serialCapturing.clear();
     setState(() {
       _qty = 0;
       _condition = 'good';
@@ -194,6 +200,61 @@ class _CaptureScreenState extends State<CaptureScreen> {
     }
   }
 
+  // ════════════ 1.5단계: 일련번호 개별 촬영 ════════════
+  Future<void> _captureSerialForIndex(int idx) async {
+    final picker = ImagePicker();
+    final XFile? photo = await picker.pickImage(
+      source: ImageSource.camera,
+      imageQuality: 90,
+    );
+    if (photo == null) return;
+
+    setState(() => _serialCapturing[idx] = true);
+
+    try {
+      final request = http.MultipartRequest(
+          'POST', Uri.parse(AppConfig.detectApiUrl))
+        ..files.add(await http.MultipartFile.fromPath(
+          'file',
+          photo.path,
+          contentType: _mimeTypeOf(photo.path),
+        ));
+
+      final streamed =
+          await request.send().timeout(const Duration(seconds: 60));
+      final response = await http.Response.fromStream(streamed);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final detections =
+            (data['detections'] as List).cast<Map<String, dynamic>>();
+
+        String? serial;
+        for (final d in detections) {
+          final s = d['serialNumber'] as String?;
+          if (s != null && s.isNotEmpty) {
+            serial = s;
+            break;
+          }
+        }
+
+        if (mounted) {
+          if (serial != null) {
+            setState(() => _capturedSerials[idx] = serial);
+          } else {
+            _showError('일련번호를 인식하지 못했습니다. 더 가까이서 촬영해 주세요.');
+          }
+        }
+      } else {
+        if (mounted) _showError('서버 오류 (${response.statusCode})');
+      }
+    } catch (e) {
+      if (mounted) _showError('일련번호 촬영 실패 — 다시 시도해 주세요.');
+    } finally {
+      if (mounted) setState(() => _serialCapturing[idx] = false);
+    }
+  }
+
   // ════════════ 2단계: detectionRecords 스키마로 Firestore 저장 ════════════
   //
   // 컬렉션: detectionRecords   (협업 팀 detection_store.py와 동일한 구조)
@@ -217,11 +278,20 @@ class _CaptureScreenState extends State<CaptureScreen> {
   Future<void> _saveToFirestore() async {
     setState(() => _saving = true);
     try {
+      // 사용자가 별도 촬영한 일련번호를 confirmedDetections에 병합
+      final detectionsToSave =
+          _confirmedDetections.asMap().entries.map((e) {
+        final d = Map<String, dynamic>.from(e.value);
+        final s = _capturedSerials[e.key];
+        if (s != null) d['serialNumber'] = s;
+        return d;
+      }).toList();
+
       await FirebaseFirestore.instance.collection('detectionRecords').add({
         // ── detection_store.py와 동일한 핵심 필드 ──
         'imageStoragePath': '',
         'capturedAt': FieldValue.serverTimestamp(),
-        'confirmedDetections': _confirmedDetections,
+        'confirmedDetections': detectionsToSave,
         'summary': _summary,
         'modelVersion': AppConfig.modelVersion,
         // ── Flutter에서 추가되는 사용자 확인 데이터 ──
@@ -692,6 +762,8 @@ class _CaptureScreenState extends State<CaptureScreen> {
               _serialCard(),
               const SizedBox(height: 13),
               _quantityCard(statusLabel, statusColor),
+              const SizedBox(height: 13),
+              _serialTable(),
               const SizedBox(height: 13),
               _conditionRow(),
               const SizedBox(height: 13),
@@ -1402,6 +1474,103 @@ class _CaptureScreenState extends State<CaptureScreen> {
     );
   }
 
+  // ════════════ 일련번호 테이블 ════════════
+  Widget _serialTable() {
+    if (_confirmedDetections.isEmpty) return const SizedBox.shrink();
+
+    return _panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('일련번호',
+              style: T.sans(
+                  size: 13,
+                  weight: FontWeight.w700,
+                  color: AppColors.textSub)),
+          const SizedBox(height: 10),
+          for (int i = 0; i < _confirmedDetections.length; i++) ...[
+            if (i > 0)
+              const Divider(height: 1, color: AppColors.borderSoft),
+            _serialRow(i),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _serialRow(int idx) {
+    final det = _confirmedDetections[idx];
+    final weaponName =
+        Weapon.yoloToDisplayName(det['class'] as String? ?? '');
+    final captured = _capturedSerials[idx];
+    final isCapturing = _serialCapturing[idx] ?? false;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 11),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(weaponName,
+                    style:
+                        T.mono(size: 14.5, weight: FontWeight.w600)),
+                const SizedBox(height: 2),
+                Text('${idx + 1}번째 탐지',
+                    style: T.sans(
+                        size: 11,
+                        weight: FontWeight.w500,
+                        color: AppColors.textMute)),
+              ],
+            ),
+          ),
+          if (isCapturing)
+            const SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                  color: AppColors.gold, strokeWidth: 2),
+            )
+          else if (captured != null)
+            Text(captured,
+                style: T.mono(
+                    size: 14,
+                    weight: FontWeight.w600,
+                    color: AppColors.goldLight,
+                    letterSpacing: 0.5))
+          else
+            GestureDetector(
+              onTap: () => _captureSerialForIndex(idx),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 13, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.gold.withOpacity(0.14),
+                  borderRadius: BorderRadius.circular(9),
+                  border: Border.all(
+                      color: AppColors.gold.withOpacity(0.4)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.photo_camera_outlined,
+                        size: 13, color: AppColors.goldLight),
+                    const SizedBox(width: 5),
+                    Text('일련번호',
+                        style: T.sans(
+                            size: 13,
+                            weight: FontWeight.w700,
+                            color: AppColors.goldLight)),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _panel({required Widget child, EdgeInsets? padding}) {
     return Container(
       padding: padding ?? const EdgeInsets.fromLTRB(16, 15, 16, 15),
@@ -1459,6 +1628,8 @@ class _CaptureScreenState extends State<CaptureScreen> {
               GestureDetector(
                 onTap: () {
                   Navigator.pop(ctx);
+                  _capturedSerials.clear();
+                  _serialCapturing.clear();
                   setState(() {
                     _screenState = _ScreenState.idle;
                     _annotatedBytes = null;
