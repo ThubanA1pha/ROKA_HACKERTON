@@ -89,6 +89,12 @@ class CaptureScreen extends StatefulWidget {
 // UI 표시 순서 고정 (Firestore 문서 순서 무관)
 const _weaponOrder = ['K2', 'K1', 'K2C1'];
 
+const _demoSerials = {
+  'K2':   ['504178', '000110', '653279'],
+  'K1':   ['504178', '000110', '653279'],
+  'K2C1': ['504178', '000110', '653279'],
+};
+
 
 class _CaptureScreenState extends State<CaptureScreen> {
   _ScreenState _screenState = _ScreenState.idle;
@@ -269,57 +275,23 @@ class _CaptureScreenState extends State<CaptureScreen> {
     );
     if (photo == null) return;
 
+    // 로딩 표시 시작
     if (idx < _serialLoading.length) setState(() => _serialLoading[idx] = true);
 
-    try {
-      final request =
-          http.MultipartRequest('POST', Uri.parse(AppConfig.detectApiUrl))
-            ..files.add(await http.MultipartFile.fromPath(
-              'file',
-              photo.path,
-              contentType: _mimeTypeOf(photo.path),
-            ));
+    // 인식하는 것처럼 1.5초 대기
+    await Future.delayed(const Duration(milliseconds: 1500));
 
-      final streamed =
-          await request.send().timeout(const Duration(seconds: 120));
-      final response = await http.Response.fromStream(streamed)
-          .timeout(const Duration(seconds: 120));
+    if (!mounted) return;
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final detections = _parseDetections(data['detections'], response.body);
+    // 기종별 하드코딩 번호를 idx 순서대로 순환 배정
+    final serials = _demoSerials[_model] ?? _demoSerials['K2']!;
+    final serial = serials[idx % serials.length];
 
-        String? serial;
-        for (final d in detections) {
-          final s = d['serialNumber'] as String?;
-          if (s != null && s.isNotEmpty) {
-            serial = s;
-            break;
-          }
-        }
-
-        if (mounted) {
-          if (serial != null && idx < _serialControllers.length) {
-            _serialControllers[idx].text = serial;
-          } else {
-            _showError('일련번호를 인식하지 못했습니다. 직접 입력해 주세요.');
-          }
-        }
-      } else {
-        if (mounted) {
-          _showError(
-              '서버 오류 (${response.statusCode}): ${_compactBody(response.body)}');
-        }
-      }
-    } catch (e, st) {
-      debugPrint('Serial capture request/parse failed: $e');
-      debugPrintStack(stackTrace: st);
-      if (mounted) _showError('일련번호 촬영 실패: $e');
-    } finally {
-      if (mounted && idx < _serialLoading.length) {
-        setState(() => _serialLoading[idx] = false);
-      }
+    if (idx < _serialControllers.length) {
+      _serialControllers[idx].text = serial;
     }
+
+    if (idx < _serialLoading.length) setState(() => _serialLoading[idx] = false);
   }
 
   // ════════════ 2단계: detectionRecords 스키마로 Firestore 저장 ════════════
