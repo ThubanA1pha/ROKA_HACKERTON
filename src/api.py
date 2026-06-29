@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from PIL import Image
 
@@ -17,6 +18,13 @@ from ocr_utils import recognize_serials_for_result
 from pipeline import DEFAULT_WEIGHTS, detect_firearms, load_model
 
 app = FastAPI(title="ROKA 총기류 탐지 API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 _model = None
 
